@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ml">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <title>Catholic Bible Study Agent</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+    <style>
+        :root { --bg: #fdf6e3; --header: #5d4037; --text: #3e2723; --accent: #8d6e63; }
+        body { font-family: 'Segoe UI', sans-serif; margin: 0; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+        
+        #menuToggle { display: none; }
+        .menu-btn { font-size: 24px; cursor: pointer; padding: 10px; color: white; }
+        .side-menu { position: fixed; top: 0; left: -300px; width: 280px; height: 100%; background: #fff; box-shadow: 2px 0 5px rgba(0,0,0,0.2); transition: 0.3s; z-index: 1000; padding: 20px; overflow-y: auto; color: #333; }
+        #menuToggle:checked ~ .side-menu { left: 0; }
+        .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; z-index: 999; }
+        #menuToggle:checked ~ .overlay { display: block; }
+
+        header { background: var(--header); color: #fff; padding: 5px 15px; display: flex; align-items: center; gap: 15px; }
+        .toolbar { background: #efebe9; padding: 10px; display: flex; gap: 8px; border-bottom: 1px solid #d7ccc8; }
+        
+        #chat-window { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 15px; }
+        .msg { max-width: 90%; padding: 12px 16px; border-radius: 12px; line-height: 1.6; font-size: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+        .user { align-self: flex-end; background: #d7ccc8; }
+        .model { align-self: flex-start; background: #fff; border: 1px solid #d7ccc8; }
+        
+        .input-bar { padding: 12px; background: #fff; border-top: 1px solid #d7ccc8; display: flex; gap: 8px; }
+        input[type="text"], input[type="password"], textarea { width: 100%; padding: 10px; border: 1px solid #bcaaa4; border-radius: 8px; margin-bottom: 10px; box-sizing: border-box; font-family: inherit; }
+        
+        button { padding: 10px 14px; border: none; border-radius: 6px; cursor: pointer; background: var(--accent); color: white; font-weight: bold; }
+        .btn-study { background: #388e3c; }
+        .btn-manual { background: #1a73e8; width: 100%; }
+        .instruction-box { font-size: 13px; background: #f9f9f9; padding: 10px; border-radius: 5px; border: 1px solid #ddd; margin-top: 15px; }
+        .save-load-area { background: #f0f4f8; padding: 10px; border-radius: 8px; margin-top: 10px; }
+        .history-item { display: flex; justify-content: space-between; align-items: center; padding: 5px; border-bottom: 1px solid #ddd; font-size: 13px; }
+    </style>
+</head>
+<body>
+
+<header>
+    <label for="menuToggle" class="menu-btn">☰</label>
+    <strong>Catholic Bible Agent</strong>
+</header>
+
+<input type="checkbox" id="menuToggle">
+<div class="overlay" onclick="document.getElementById('menuToggle').checked = false"></div>
+
+<div class="side-menu">
+    <h3>Settings</h3>
+    <input type="password" id="apiKey" placeholder="Gemini API Key">
+    <button onclick="saveKey()" style="width: 100%; margin-bottom: 10px;">💾 Save Key</button>
+    <button onclick="showUserGuide()" style="width: 100%; background: #0288d1; margin-bottom: 10px;">📖 User Guide</button>
+    <div class="save-load-area">
+        <h4>Archive Session</h4>
+        <input type="text" id="saveName" placeholder="Session Name (e.g. Lent Day 1)">
+        <button onclick="saveSession()" style="width: 100%; background: #5d4037;">📂 Save Current Chat</button>
+        <div id="savedList" style="margin-top:10px;"></div>
+    </div>
+
+    <hr>
+    <h3>Manual Verse Entry</h3>
+    <textarea id="manualVerses" rows="2" placeholder="Enter verses manually..."></textarea>
+    <button class="btn-manual" onclick="runManualStudy()">📖 Analyze Manual Verses</button>
+
+    <div class="instruction-box">
+        <strong>How to get a Key:</strong><br>
+        1. Go to <a href="https://aistudio.google.com/app/api-keys" target="_blank">AI Studio</a><br>
+        2. Click <b>Get API key</b><br>
+        3. <b>Create API key</b> -> Name it -> Select "Gemini API" -> <b>Create Key</b><br>
+        4. Copy and paste it above.
+    </div>
+
+
+</div>
+
+<div class="toolbar">
+    <button class="btn-study" onclick="runUSCCBStudy()">📖 Today's Study</button>
+    <button onclick="shareChat()" style="background:#0288d1">📤 Share Study</button> 
+    <button onclick="clearChat()" style="background:#a93226">🗑️ Clear Session</button>
+</div>
+
+
+<div id="chat-window"></div>
+
+<div class="input-bar">
+    <input type="text" id="userInput" placeholder="Ask follow-up questions..." onkeypress="if(event.key==='Enter') sendMessage()">
+    <button onclick="sendMessage()" style="background:#1a73e8">Ask</button>
+</div>
+
+<script type="module">
+    import { GoogleGenerativeAI } from "https://esm.run/@google/generative-ai";
+
+    const bibleSystemPrompt = "You are an expert in bible and cathechism of catholic church. Answer questions based on these books, quoting verses, in Malayalam. Maintain context of previous verses discussed.";
+
+    //*****************
+    window.shareChat = async () => {
+        if (currentHistory.length === 0) return alert("Nothing to share yet!");
+
+        // 1. Format the conversation into a single string
+        let shareText = "--- Catholic Bible Study ---\n\n";
+        
+        currentHistory.forEach(msg => {
+            const role = msg.role === "user" ? "Me" : "Agent";
+            // Clean up any Markdown bolding/headings for plain text sharing
+            const cleanText = msg.parts[0].text.replace(/[#*]/g, "");
+            shareText += `${role}:\n${cleanText}\n\n`;
+        });
+
+        shareText += "Generated by Catholic Bible Agent";
+
+        // 2. Use the Web Share API
+        if (navigator.share) {
+            try {
+                await navigator.share({
+                    title: 'Daily Bible Study',
+                    text: shareText
+                });
+            } catch (err) {
+                console.log("Share cancelled or failed");
+            }
+        } else {
+            // Fallback: Copy to clipboard if Share API isn't supported
+            try {
+                await navigator.clipboard.writeText(shareText);
+                alert("Share menu not supported on this browser, but the study has been copied to your clipboard!");
+            } catch (err) {
+                alert("Could not copy text.");
+            }
+        }
+    };
+
+    //*********************
+
+
+    
+    // Session State
+    let currentHistory = []; // Array of {role: "user"|"model", parts: [{text: ""}]}
+
+    window.onload = () => {
+        const saved = localStorage.getItem('gemini_api_key');
+        if (saved) {
+            try {
+                // atob (ASCII to Binary) decodes the scramble
+                document.getElementById('apiKey').value = atob(saved);
+            } catch (e) {
+                // Fallback: if it was saved before scrambling was added
+                document.getElementById('apiKey').value = saved;
+            }
+        }
+    };
+
+
+    window.showUserGuide = () => {
+        // Close the menu first
+        document.getElementById('menuToggle').checked = false;
+        
+        // Clear the chat window for the guide
+        const chatWin = document.getElementById('chat-window');
+        chatWin.innerHTML = '';
+        
+        const guideText = `
+    # 📖 Catholic Bible Study - User Guide
+
+    ### 🚀 Getting Started
+    1. **API Key**: Enter your Google Gemini API Key in the side menu and click **Save**.
+    2. API keys is saved only in your device's local storage and is scrambled for basic obfuscation. You can clear it anytime by clearing the saved key in the menu.
+    4. Make sure to clear this if you are using a public/shared computer after your session.
+    3. **Today's Study**: Click the green **Today's Study** button to automatically fetch and analyze the USCCB Mass readings.
+
+    ### 🛠 Features
+    * **Automatic Fetching**: Uses a dual-proxy system to bypass CORS restrictions to access USCCB web pages and extract today's readings.
+    * **If one proxy fails, it automatically retries with another. If both fail, it will show an error message.
+    * **Manual Verse Analysis**: Paste any Bible verses in the manual input area and click the blue button to get theological questions and answers based on those verses.
+    * **Malayalam Analysis**: Gemini generates theological questions and answers in Malayalam.
+    * **Archive**: Save your favorite sessions to your browser's local storage in unique names for later review.
+    * **Interactive Chat**: Ask follow-up questions based on the current session's context. The agent remembers the flow of conversation and can refer back to previous verses and discussions.
+    * **Share**: Use the share button to share your study session via supported platforms or copy it to clipboard to share manually.
+
+
+    ### ⚠️ Troubleshooting
+    * **Fetch Failed**: If the first proxy fails, the app automatically retries with a second one. If both fail, check your internet connection.
+    * **Reading 2 is None**: On most weekdays, the liturgy only has one reading and a Gospel. This is normal behavior.
+        `;
+
+        // Use your existing addMessage function to display it
+        addMessage('model', guideText);
+    };
+
+    window.saveKey = () => {
+        const rawKey = document.getElementById('apiKey').value;
+        if (!rawKey) return alert("Please enter a key.");
+        
+        // btoa (Binary to ASCII) turns the key into a Base64 string
+        const scrambledKey = btoa(rawKey); 
+        
+        localStorage.setItem('gemini_api_key', scrambledKey);
+        alert("Key saved and scrambled successfully.");
+        document.getElementById('menuToggle').checked = false;
+    };
+
+    function extractReading(text, type) {
+        let pattern = (type === "Reading 1") ? /Reading\s+(?:1|I)\s+([^\n\r]+)/i :
+                      (type === "Reading 2") ? /Reading\s+(?:2|II)\s+([^\n\r]+)/i :
+                      new RegExp(`${type}\\s+([^\\n\\r]+)`, "i");
+        const match = text.match(pattern);
+        return match ? match[1].trim() : null;
+    }
+
+    // New Session-Aware Analysis
+    async function performAnalysis(key, promptText, loadingDiv) {
+        try {
+            const genAI = new GoogleGenerativeAI(key);
+            const model = genAI.getGenerativeModel({ model: "gemini-flash-latest", systemInstruction: bibleSystemPrompt });
+            
+            // Start chat with current history
+            const chat = model.startChat({ history: currentHistory });
+            
+            const result = await chat.sendMessage(promptText);
+            const responseText = result.response.text();
+
+            // Update local history
+            currentHistory.push({ role: "user", parts: [{ text: promptText }] });
+            currentHistory.push({ role: "model", parts: [{ text: responseText }] });
+
+            loadingDiv.innerHTML = marked.parse(responseText);
+        } catch (e) {
+            loadingDiv.innerHTML = `<span style="color:red">Error: ${e.message}</span>`;
+        }
+    }
+
+    window.runManualStudy = async () => {
+        const key = document.getElementById('apiKey').value;
+        const verses = document.getElementById('manualVerses').value.trim();
+        if (!key || !verses) return alert("Key or Verses missing.");
+        
+        addMessage('user', `Analyzing: ${verses}`);
+        const loadingDiv = addMessage('model', 'Thinking...');
+        await performAnalysis(key, `Generate as many critical questions and detailed answers in Malayalam based on these verses: ${verses}. Use Bible/Catechism as authority. Print exact content of verses quoted and their questions and answers in a single section.`, loadingDiv);
+    };
+
+    // Helper function to handle proxy rotation and retries
+    async function fetchWithRetry(targetUrl) {
+        const proxies = [
+            (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+            (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`
+        ];
+
+        let lastError = null;
+
+        for (const proxyGenerator of proxies) {
+            const proxyUrl = proxyGenerator(targetUrl);
+            
+            // Try each proxy 2 times
+            for (let attempt = 1; attempt <= 2; attempt++) {
+                try {
+                    console.log(`Attempt ${attempt} using proxy: ${proxyUrl}`);
+                    const res = await fetch(proxyUrl);
+                    if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+                    
+                    const data = await res.json();
+                    // AllOrigins returns the content inside a 'contents' property
+                    // corsproxy.io usually returns the direct content, so we handle both
+                    return data.contents || data; 
+                } catch (e) {
+                    console.warn(`Attempt ${attempt} failed: ${e.message}`);
+                    lastError = e;
+                }
+            }
+        }
+        throw new Error(`All proxies failed after 4 total attempts. Last error: ${lastError.message}`);
+    }
+
+    window.runUSCCBStudy = async () => {
+        // Reset the current context for today's verses
+        currentHistory = []; 
+        document.getElementById('chat-window').innerHTML = ''; 
+
+        const key = document.getElementById('apiKey').value;
+        if (!key) return alert("Please enter your Gemini API Key.");
+
+        const date = new Date();
+        const dateCode = String(date.getMonth() + 1).padStart(2, '0') + 
+                         String(date.getDate()).padStart(2, '0') + 
+                         String(date.getFullYear()).slice(-2);
+        
+        const targetUrl = `https://bible.usccb.org/bible/readings/${dateCode}.cfm`;
+        const loadingDiv = addMessage('model', 'Fetching USCCB via proxy...');
+
+        try {
+            // Use our new retry logic
+            const contents = await fetchWithRetry(targetUrl);
+            
+            const tempDiv = document.createElement("div");
+            tempDiv.innerHTML = contents;
+            const plainText = tempDiv.innerText || tempDiv.textContent;
+
+            const r1 = extractReading(plainText, "Reading 1") || "Not found";
+            const r2 = extractReading(plainText, "Reading 2") || "None";
+            const gospel = extractReading(plainText, "Gospel") || "Not found";
+            const verses = `Reading 1: ${r1}, Reading 2: ${r2}, Gospel: ${gospel}`;
+
+            await performAnalysis(key, `Generate as many critical questions and detailed answers in Malayalam based on these verses: ${verses}. Use Bible/Catechism as authority. Print exact content of verses quoted and their questions and answers in a single section.`, loadingDiv);
+        } catch (e) { 
+            loadingDiv.innerHTML = `<span style="color:red">Fetch failed: ${e.message}</span>`;
+        }
+    };
+
+    window.sendMessage = async () => {
+        const key = document.getElementById('apiKey').value;
+        const text = document.getElementById('userInput').value.trim();
+        if (!key || !text) return;
+
+        addMessage('user', text);
+        document.getElementById('userInput').value = "";
+        const loadingDiv = addMessage('model', '...');
+        await performAnalysis(key, text, loadingDiv);
+    };
+
+    function addMessage(role, text) {
+        const win = document.getElementById('chat-window');
+        const div = document.createElement('div');
+        div.className = `msg ${role}`;
+        div.innerHTML = marked.parse(text);
+        win.appendChild(div);
+        win.scrollTop = win.scrollHeight;
+        return div;
+    }
+
+    window.clearChat = () => {
+        if(confirm("Wipe current session context?")) {
+            currentHistory = [];
+            document.getElementById('chat-window').innerHTML = '';
+        }
+    };
+
+    // SAVE/RESTORE LOGIC
+    window.saveSession = () => {
+        const name = document.getElementById('saveName').value.trim();
+        if (!name || currentHistory.length === 0) return alert("Enter a name and ensure chat isn't empty.");
+        
+        const sessions = JSON.parse(localStorage.getItem('bible_sessions') || "{}");
+        sessions[name] = currentHistory;
+        localStorage.setItem('bible_sessions', JSON.stringify(sessions));
+        
+        alert("Session saved!");
+        updateSavedList();
+    };
+
+    function updateSavedList() {
+        const sessions = JSON.parse(localStorage.getItem('bible_sessions') || "{}");
+        const list = document.getElementById('savedList');
+        list.innerHTML = "";
+        Object.keys(sessions).forEach(name => {
+            const div = document.createElement('div');
+            div.className = "history-item";
+            div.innerHTML = `<span>${name}</span> 
+                <div>
+                    <button onclick="loadSession('${name}')" style="background:#388e3c; padding:4px 8px; font-size:10px;">Load</button>
+                    <button onclick="deleteSession('${name}')" style="background:#a93226; padding:4px 8px; font-size:10px;">X</button>
+                </div>`;
+            list.appendChild(div);
+        });
+    }
+
+    window.loadSession = (name) => {
+        const sessions = JSON.parse(localStorage.getItem('bible_sessions') || "{}");
+        currentHistory = sessions[name];
+        document.getElementById('chat-window').innerHTML = "";
+        currentHistory.forEach(msg => {
+            addMessage(msg.role === "user" ? "user" : "model", msg.parts[0].text);
+        });
+        document.getElementById('menuToggle').checked = false;
+    };
+
+    window.deleteSession = (name) => {
+        const sessions = JSON.parse(localStorage.getItem('bible_sessions') || "{}");
+        delete sessions[name];
+        localStorage.setItem('bible_sessions', JSON.stringify(sessions));
+        updateSavedList();
+    };
+</script>
+</body>
+</html>
